@@ -64,10 +64,10 @@ jobs:
       - name: Install tflint
         run: |
           VERSION="$TFLINT_VERSION"
-          curl -sSLo tflint.zip "https://github.com/terraform-linters/tflint/releases/download/${VERSION}/tflint_linux_amd64.zip"
+          curl -sSLo tflint_linux_amd64.zip "https://github.com/terraform-linters/tflint/releases/download/${VERSION}/tflint_linux_amd64.zip"
           curl -sSLo checksums.txt "https://github.com/terraform-linters/tflint/releases/download/${VERSION}/checksums.txt"
           grep "tflint_linux_amd64.zip" checksums.txt | sha256sum --check --status
-          unzip tflint.zip
+          unzip tflint_linux_amd64.zip
           chmod +x tflint
           mkdir -p $HOME/bin
           mv tflint $HOME/bin
