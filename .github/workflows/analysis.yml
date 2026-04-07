@@ -1,0 +1,120 @@
+name: Terraform Static Analysis
+
+permissions:
+  contents: read
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        description: "Directory to run static analysis against (defaults to repository root)"
+        required: false
+        type: string
+        default: "."
+      terraform_version:
+        description: "Version of Terraform to install (e.g. 1.11.0). Defaults to latest."
+        required: false
+        type: string
+        default: "latest"
+      tflint_version:
+        description: "Version of tflint to install (e.g. v0.61.0)"
+        required: false
+        type: string
+        default: "v0.61.0"
+      checkov_version:
+        description: "Version of checkov to install (e.g. 3.2.0)"
+        required: false
+        type: string
+        default: "3.2.0"
+
+jobs:
+  terraform-format:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Validate working_directory
+        run: |
+          resolved=$(realpath -m "$WORKING_DIR")
+          repo_root=$(realpath "$GITHUB_WORKSPACE")
+          if [[ "$resolved" != "$repo_root" && "$resolved" != "$repo_root/"* ]]; then
+            echo "::error::working_directory '$WORKING_DIR' resolves outside the repository root."
+            exit 1
+          fi
+        env:
+          WORKING_DIR: ${{ inputs.working_directory }}
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+
+      - name: Run terraform format check
+        working-directory: ${{ inputs.working_directory }}
+        run: terraform fmt -check -recursive
+
+  tflint:
+    needs: [terraform-format]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install tflint
+        run: |
+          VERSION="$TFLINT_VERSION"
+          curl -sSLo tflint.zip "https://github.com/terraform-linters/tflint/releases/download/${VERSION}/tflint_linux_amd64.zip"
+          curl -sSLo checksums.txt "https://github.com/terraform-linters/tflint/releases/download/${VERSION}/checksums.txt"
+          grep "tflint_linux_amd64.zip" checksums.txt | sha256sum --check --status
+          unzip tflint.zip
+          chmod +x tflint
+          mkdir -p $HOME/bin
+          mv tflint $HOME/bin
+          echo "$HOME/bin" >> $GITHUB_PATH
+        env:
+          TFLINT_VERSION: ${{ inputs.tflint_version }}
+
+      - name: Cache tflint plugins
+        uses: actions/cache@v4
+        with:
+          path: ~/.tflint.d/plugins
+          key: tflint-plugins-${{ inputs.tflint_version }}-${{ hashFiles('**/.tflint.hcl') }}
+
+      - name: Initialise tflint plugins
+        working-directory: ${{ inputs.working_directory }}
+        run: tflint --init
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Run tflint
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          set -eo pipefail
+          root_dir=$(pwd)
+          failed=0
+          while IFS= read -r dir; do
+            echo "Running tflint in: $dir"
+            tflint --chdir "$dir" --config "${root_dir}/.tflint.hcl" || failed=1
+          done < <(find . -type f -name "*.tf" \
+            ! -path "*/tests/*" \
+            ! -path "*/.terraform/*" \
+            ! -path "*/examples/*" \
+            -exec dirname {} \; | sort -u)
+          exit $failed
+
+  checkov:
+    needs: [terraform-format]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install checkov
+        run: pip3 install "checkov==$CHECKOV_VERSION"
+        env:
+          CHECKOV_VERSION: ${{ inputs.checkov_version }}
+
+      - name: Run checkov
+        working-directory: ${{ inputs.working_directory }}
+        run: checkov -d . --framework terraform
